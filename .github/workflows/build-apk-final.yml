@@ -1,0 +1,95 @@
+name: Build APK Final
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Restore Android project from existing workflow data
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64
+
+          files = [
+              Path(".github/workflows/build-apk-v2.yml"),
+              Path(".github/workflows/build-apk-fixed.yml"),
+              Path(".github/workflows/build-apk.yml"),
+          ]
+
+          text = ""
+          used = None
+          for p in files:
+              if p.exists():
+                  s = p.read_text(encoding="utf-8", errors="ignore")
+                  if "PROJECT_BASE64" in s and "UEsDB" in s:
+                      text = s
+                      used = p
+                      break
+
+          if not text:
+              raise SystemExit("No old workflow with embedded project data found.")
+
+          start = text.find("UEsDB")
+          end = text.find("PROJECT_BASE64", start)
+          if end == -1:
+              end = len(text)
+
+          payload = text[start:end]
+          b64 = "".join(ch for ch in payload if ch.isalnum() or ch in "+/=")
+
+          print("Using:", used)
+          print("Base64 length:", len(b64))
+
+          if len(b64) < 1000:
+              raise SystemExit("Extracted Base64 is too short.")
+
+          Path("project.zip").write_bytes(base64.b64decode(b64))
+          PY
+
+          unzip -q project.zip
+          echo "Restored files:"
+          ls -la
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.10.2
+
+      - name: Build debug APK
+        working-directory: PersonalityCoreV6_AndroidStudio_Project
+        run: |
+          gradle assembleDebug --no-daemon
+          echo "Searching APK files..."
+          find . -name "*.apk" -type f -print
+
+      - name: Collect APK files
+        run: |
+          mkdir -p apk-output
+          find PersonalityCoreV6_AndroidStudio_Project -name "*.apk" -type f -exec cp {} apk-output/ \;
+          echo "Collected APK files:"
+          ls -lah apk-output
+          test -n "$(ls -A apk-output)"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PersonalityCoreV6-installable-apk
+          path: apk-output/*.apk
+          if-no-files-found: error
+
